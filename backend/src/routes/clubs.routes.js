@@ -1,9 +1,11 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
+const bcrypt = require('bcrypt'); // Adăugat pentru a putea cripta parola noului admin creat automat
 const db = require('../db');
 
 const router = express.Router();
 
+// Middleware de bază pentru autentificare (verifică dacă utilizatorul e logat)
 const authenticateToken = (req, res, next) => {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1];
@@ -17,18 +19,27 @@ const authenticateToken = (req, res, next) => {
     });
 };
 
+// Middleware strict pentru Super Admin
+const authorizeSuperAdmin = (req, res, next) => {
+    if (req.user.role !== 'super_admin') {
+        return res.status(403).json({ error: 'Acces interzis. Doar Super Admin-ul poate gestiona platforma.' });
+    }
+    next();
+};
 
-// Obține toate cluburile (inclusiv detalii despre terenurile lor pentru filtre)
+// Obține toate cluburile (inclusiv detalii despre terenuri și EMAIL-UL adminului alocat)
 router.get('/', async (req, res) => {
     try {
         const result = await db.query(`
             SELECT 
-                cl.id, cl.name, cl.city, cl.opening_hour, cl.closing_hour,
+                cl.id, cl.name, cl.city, cl.opening_hour, cl.closing_hour, cl.admin_id,
+                u.email AS admin_email,
                 ARRAY_REMOVE(ARRAY_AGG(DISTINCT c.surface), NULL) AS surfaces,
                 COALESCE(BOOL_OR(c.is_indoor), false) AS has_indoor
             FROM clubs cl
             LEFT JOIN courts c ON cl.id = c.club_id
-            GROUP BY cl.id
+            LEFT JOIN users u ON cl.admin_id = u.id
+            GROUP BY cl.id, u.email
             ORDER BY cl.name ASC
         `);
         res.json(result.rows);
@@ -49,9 +60,7 @@ router.get('/:id/courts', async (req, res) => {
     }
 });
 
-
-
-// 1. Obține recenziile unui club și calculează media notelor
+// Obține recenziile unui club și calculează media notelor
 router.get('/:id/reviews', async (req, res) => {
     const clubId = req.params.id;
     try {
@@ -63,11 +72,10 @@ router.get('/:id/reviews', async (req, res) => {
             ORDER BY r.created_at DESC
         `, [clubId]);
 
-        // Calculăm media notelor
         let averageRating = 0;
         if (result.rows.length > 0) {
             const sum = result.rows.reduce((acc, curr) => acc + curr.rating, 0);
-            averageRating = (sum / result.rows.length).toFixed(1); // o singură zecimală (ex: 4.5)
+            averageRating = (sum / result.rows.length).toFixed(1);
         }
 
         res.json({
@@ -81,7 +89,7 @@ router.get('/:id/reviews', async (req, res) => {
     }
 });
 
-// 2. Adaugă o recenzie nouă pentru un club
+// Adaugă o recenzie nouă pentru un club
 router.post('/:id/reviews', authenticateToken, async (req, res) => {
     const clubId = req.params.id;
     const userId = req.user.id;
@@ -98,12 +106,108 @@ router.post('/:id/reviews', authenticateToken, async (req, res) => {
         );
         res.status(201).json({ message: 'Recenzie adăugată cu succes!', review: newReview.rows[0] });
     } catch (err) {
-        // Interceptăm eroarea specifică de la baza de date (constraint-ul UNIQUE creat)
         if (err.constraint === 'one_review_per_user_club') {
             return res.status(400).json({ error: 'Ai adăugat deja o recenzie pentru acest club.' });
         }
         console.error('Eroare la adăugarea recenziei:', err.message);
         res.status(500).json({ error: 'Eroare internă a serverului.' });
+    }
+});
+
+// Obține lista tuturor utilizatorilor cu rol de 'club_admin' (pentru sugestii)
+router.get('/admins/list', authenticateToken, authorizeSuperAdmin, async (req, res) => {
+    try {
+        const admins = await db.query("SELECT id, name, email FROM users WHERE role = 'club_admin'");
+        res.json(admins.rows);
+    } catch (err) {
+        res.status(500).json({ error: 'Eroare la preluarea administratorilor.' });
+    }
+});
+
+// Adaugă un club nou (POST) - Găsește sau creează automat adminul pe baza email-ului
+router.post('/', authenticateToken, authorizeSuperAdmin, async (req, res) => {
+    const { name, city, opening_hour, closing_hour, admin_email } = req.body;
+    
+    try {
+        let finalAdminId = null;
+        if (admin_email && admin_email.trim() !== '') {
+            const emailClean = admin_email.trim();
+            const userCheck = await db.query("SELECT id FROM users WHERE email = $1", [emailClean]);
+            
+            if (userCheck.rows.length > 0) {
+                finalAdminId = userCheck.rows[0].id;
+            } else {
+                // Dacă emailul introdus nu există în baza de date, îl creăm automat ca 'club_admin'
+                const hashedPassword = await bcrypt.hash('parola123', 10);
+                const newUser = await db.query(
+                    "INSERT INTO users (name, email, password_hash, role) VALUES ($1, $2, $3, 'club_admin') RETURNING id",
+                    ['Admin ' + emailClean.split('@')[0], emailClean, hashedPassword]
+                );
+                finalAdminId = newUser.rows[0].id;
+            }
+        }
+
+        const newClub = await db.query(
+            'INSERT INTO clubs (name, city, opening_hour, closing_hour, admin_id) VALUES ($1, $2, $3, $4, $5) RETURNING *',
+            [name, city, opening_hour, closing_hour, finalAdminId]
+        );
+        res.status(201).json({ message: 'Club adăugat cu succes!', club: newClub.rows[0] });
+    } catch (err) {
+        console.error('Eroare la adăugarea clubului:', err.message);
+        res.status(500).json({ error: 'Eroare la adăugarea clubului.' });
+    }
+});
+
+// Actualizează un club existent (PUT) - Găsește sau creează automat adminul pe baza email-ului
+router.put('/:id', authenticateToken, authorizeSuperAdmin, async (req, res) => {
+    const { id } = req.params;
+    const { name, city, opening_hour, closing_hour, admin_email } = req.body;
+    
+    try {
+        let finalAdminId = null;
+        if (admin_email && admin_email.trim() !== '') {
+            const emailClean = admin_email.trim();
+            const userCheck = await db.query("SELECT id FROM users WHERE email = $1", [emailClean]);
+            
+            if (userCheck.rows.length > 0) {
+                finalAdminId = userCheck.rows[0].id;
+            } else {
+                // Dacă emailul introdus nu există la editare, îl creăm automat
+                const hashedPassword = await bcrypt.hash('parola123', 10);
+                const newUser = await db.query(
+                    "INSERT INTO users (name, email, password_hash, role) VALUES ($1, $2, $3, 'club_admin') RETURNING id",
+                    ['Admin ' + emailClean.split('@')[0], emailClean, hashedPassword]
+                );
+                finalAdminId = newUser.rows[0].id;
+            }
+        }
+
+        const updatedClub = await db.query(
+            'UPDATE clubs SET name = $1, city = $2, opening_hour = $3, closing_hour = $4, admin_id = $5 WHERE id = $6 RETURNING *',
+            [name, city, opening_hour, closing_hour, finalAdminId, id]
+        );
+        
+        if (updatedClub.rows.length === 0) {
+            return res.status(404).json({ error: 'Clubul nu a fost găsit.' });
+        }
+        
+        res.json({ message: 'Club actualizat cu succes!', club: updatedClub.rows[0] });
+    } catch (err) {
+        console.error('Eroare la actualizarea clubului:', err.message);
+        res.status(500).json({ error: 'Eroare la actualizarea clubului.' });
+    }
+});
+
+// Șterge un club existent (DELETE)
+router.delete('/:id', authenticateToken, authorizeSuperAdmin, async (req, res) => {
+    const { id } = req.params;
+    try {
+        const deletedClub = await db.query('DELETE FROM clubs WHERE id = $1 RETURNING *', [id]);
+        if (deletedClub.rows.length === 0) return res.status(404).json({ error: 'Clubul nu a fost găsit.' });
+        res.json({ message: 'Club șters cu succes!' });
+    } catch (err) {
+        console.error('Eroare la ștergerea clubului:', err.message);
+        res.status(500).json({ error: 'Eroare la ștergerea clubului.' });
     }
 });
 

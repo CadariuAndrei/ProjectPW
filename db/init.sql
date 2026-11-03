@@ -1,10 +1,13 @@
+-- Ștergem tabelele vechi (dacă există) pentru a preveni erorile la repornirea Docker-ului
+DROP TABLE IF EXISTS reviews, match_players, bookings, courts, clubs, users CASCADE;
 
 CREATE TABLE users (
     id SERIAL PRIMARY KEY,
     name VARCHAR(100) NOT NULL,
     email VARCHAR(100) UNIQUE NOT NULL,
     password_hash VARCHAR(255) NOT NULL,
-    role VARCHAR(20) DEFAULT 'player' CHECK (role IN ('player', 'club_admin')),
+    -- Am adăugat rolul de 'super_admin' aici:
+    role VARCHAR(20) DEFAULT 'player' CHECK (role IN ('player', 'club_admin', 'super_admin')),
     skill_level NUMERIC(2,1) CHECK (skill_level >= 2.0 AND skill_level <= 5.0)
 );
 
@@ -14,7 +17,9 @@ CREATE TABLE clubs (
     city VARCHAR(100) NOT NULL,
     opening_hour INTEGER CHECK (opening_hour >= 0 AND opening_hour <= 23),
     closing_hour INTEGER CHECK (closing_hour >= 0 AND closing_hour <= 24),
-    night_lighting_hour INTEGER CHECK (night_lighting_hour >= 16 AND night_lighting_hour <= 23)
+    night_lighting_hour INTEGER CHECK (night_lighting_hour >= 16 AND night_lighting_hour <= 23),
+    -- Am integrat admin_id direct la creare:
+    admin_id INTEGER REFERENCES users(id) ON DELETE SET NULL
 );
 
 CREATE TABLE courts (
@@ -59,22 +64,29 @@ CREATE TABLE reviews (
     CONSTRAINT one_review_per_user_club UNIQUE (club_id, user_id)
 );
 
+-- ==========================================
+-- INSERT-URI DATE DE BAZĂ
+-- ==========================================
+
 INSERT INTO users (name, email, password_hash, role, skill_level) VALUES 
 ('Ciprian', 'ciprian@test.com', '$2b$10$X...', 'player', 4.0),
 ('Alex', 'alex@test.com', '$2b$10$X...', 'player', 3.5),
 ('Elena', 'elena@test.com', '$2b$10$X...', 'player', 2.5),
 ('Mihai', 'mihai@test.com', '$2b$10$X...', 'player', 4.5),
-('Admin Helios', 'admin@helios.ro', '$2b$10$X...', 'club_admin', NULL),
-('Admin Dyadora', 'admin@dyadora.ro', '$2b$10$X...', 'club_admin', NULL),
-('Admin Rogo', 'admin@rogo.ro', '$2b$10$X...', 'club_admin', NULL),
-('Admin Next Gen', 'admin@nextgen.ro', '$2b$10$X...', 'club_admin', NULL);
+('Admin Helios', 'admin@helios.ro', '$2b$10$X...', 'club_admin', NULL),      -- id: 5
+('Admin Dyadora', 'admin@dyadora.ro', '$2b$10$X...', 'club_admin', NULL),    -- id: 6
+('Admin Rogo', 'admin@rogo.ro', '$2b$10$X...', 'club_admin', NULL),          -- id: 7
+('Admin Next Gen', 'admin@nextgen.ro', '$2b$10$X...', 'club_admin', NULL),   -- id: 8
+('Admin2 Helios', 'admin2@helios.ro', '$2b$10$X...', 'club_admin', NULL),    -- id: 9 (Adăugat din update-ul tău)
+('Super Admin', 'admin@test.com', '$2b$10$X...', 'super_admin', NULL);       -- id: 10 (Adăugat contul cu rol maxim)
 
-INSERT INTO clubs (name, city, opening_hour, closing_hour, night_lighting_hour) VALUES 
-('Club Helios', 'Timisoara', 8, 23, 19),
-('CS Dyadora', 'Timisoara', 7, 22, 18),
-('Baza Sportiva Politehnica', 'Timisoara', 8, 22, 19),
-('Tenis Club Rogo', 'Timisoara', 8, 22, 19),
-('Next Gen', 'Timisoara', 7, 23, 19);
+-- Am integrat admin_id (id-urile corespund cu insertul de deasupra)
+INSERT INTO clubs (name, city, opening_hour, closing_hour, night_lighting_hour, admin_id) VALUES 
+('Club Helios', 'Timisoara', 8, 23, 19, 9), -- 9 este Admin2 Helios
+('CS Dyadora', 'Timisoara', 7, 22, 18, 6),
+('Baza Sportiva Politehnica', 'Timisoara', 8, 22, 19, NULL),
+('Tenis Club Rogo', 'Timisoara', 8, 22, 19, 7),
+('Next Gen', 'Timisoara', 7, 23, 19, 8);
 
 INSERT INTO courts (club_id, name, surface, is_indoor, base_price, night_price_supplement, indoor_price_supplement) VALUES 
 (1, 'Central', 'Zgură', FALSE, 60.00, 20.00, 0),
@@ -107,13 +119,3 @@ INSERT INTO reviews (club_id, user_id, rating, comment) VALUES
 (5, 2, 5, 'Terenurile de la Next Gen sunt impecabile.');
 
 
-
-ALTER TABLE clubs ADD COLUMN admin_id INTEGER REFERENCES users(id) ON DELETE SET NULL;
-
-UPDATE clubs SET admin_id = 5 WHERE id = 1;
-UPDATE clubs SET admin_id = 6 WHERE id = 2;
-UPDATE clubs SET admin_id = 7 WHERE id = 4;
-UPDATE clubs SET admin_id = 8 WHERE id = 5;
-
-UPDATE users SET role = 'club_admin' WHERE email = 'admin2@helios.ro';
-UPDATE clubs SET admin_id = (SELECT id FROM users WHERE email = 'admin2@helios.ro') WHERE id = 1;

@@ -6,6 +6,7 @@ import Register from './Register';
 import Profile from './Profile';
 import OpenMatches from './OpenMatches';
 import AdminDashboard from './AdminDashboard';
+import SuperAdminDashboard from './SuperAdminDashboard'; 
 import { Toaster } from 'react-hot-toast';
 
 function Home() {
@@ -157,9 +158,17 @@ function App() {
             Găsește Parteneri
           </Link>
           
+          {/* Meniul pentru Club Admin */}
           {user && user.role === 'club_admin' && (
             <Link to="/admin" className="text-orange-400 hover:text-orange-300 font-bold transition-colors mt-1 border border-orange-500/50 bg-orange-500/10 px-3 py-1 rounded">
               Panou Admin
+            </Link>
+          )}
+
+          {/* 2. Noul meniu pentru Super Admin */}
+          {user && user.role === 'super_admin' && (
+            <Link to="/super-admin" className="text-purple-400 hover:text-purple-300 font-bold transition-colors mt-1 border border-purple-500/50 bg-purple-500/10 px-3 py-1 rounded">
+              Panou Sistem
             </Link>
           )}
         </div>
@@ -202,6 +211,8 @@ function App() {
           <Route path="/profile" element={<Profile />} />
           <Route path="/open-matches" element={<OpenMatches />} />
           <Route path="/admin" element={<AdminDashboard />} />
+          {/* 3. Ruta pentru panoul de Super Admin */}
+          <Route path="/super-admin" element={<SuperAdminDashboard />} />
         </Routes>
       </div>
     </div>
